@@ -106,3 +106,4 @@ dmypy.json
 
 # OUR STUFF
 dataset/
+.DS_Store
