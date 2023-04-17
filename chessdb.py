@@ -8,8 +8,7 @@ import chess
 import chess.pgn
 import io
 
-FPATH = 'dataset/all_with_filtered_anotations_since1998.txt'
-
+FPATH = '/home/asy51/repos/graphmaster/dataset/all_with_filtered_anotations_since1998.txt'
 
 def parse(fpath=FPATH, nrows=1000) -> pd.DataFrame:
     df = pd.read_csv(fpath, engine='python', skiprows=4, sep='###', nrows=nrows)
@@ -20,6 +19,8 @@ def parse(fpath=FPATH, nrows=1000) -> pd.DataFrame:
     df['moves'] = df.iloc[:,1]
     df['moves'] = df['moves'].str.replace('[WB]\d+?\.', '', regex=True)
     df = df.iloc[:,2:].set_index('id')
+    
+    df = df[(df['setup'] == 'setup_false') & (df['bad_len'] == 'blen_false') & (df['moves'].notna())]
     return df
 
 def get_game(row: pd.Series):
