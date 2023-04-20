@@ -115,7 +115,7 @@ class GCN(torch.nn.Module):
         
         return x
 
-model = GCN().to('cuda:1')
+model = GCN().to('cuda')
 print(model)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=CONFIG['lr'])
@@ -125,7 +125,7 @@ def train():
     model.train()
 
     for data in train_loader:  # Iterate in batches over the training dataset.
-        data = data.to('cuda:1')
+        data = data.to('cuda')
         out = model(data.x, data.edge_index, data.batch)  # Perform a single forward pass.
         loss = criterion(out, data.y)  # Compute the loss.
         loss.backward()  # Derive gradients.
@@ -136,7 +136,7 @@ def test(loader):
     model.eval()
     correct = 0
     for data in loader:  # Iterate in batches over the training/test dataset.
-        data = data.to('cuda:1')
+        data = data.to('cuda')
         out = model(data.x, data.edge_index, data.batch)  
         pred = out.argmax(dim=1)  # Use the class with highest probability.
         correct += int((pred == data.y).sum())

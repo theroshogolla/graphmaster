@@ -7,6 +7,12 @@ import pandas as pd
 import chess
 import chess.pgn
 import io
+from torch_geometric.data import InMemoryDataset
+import data as my_data
+from tqdm import tqdm
+import random
+
+tqdm.pandas()
 
 FPATH = '/home/asy51/repos/graphmaster/dataset/all_with_filtered_anotations_since1998.txt'
 
@@ -52,3 +58,17 @@ def get_boards(g: chess.pgn.Game, skip_first_n=10, skip_last_n=10, meta=['win'])
         ret.append(item_dict)
         cur = cur.next()
     return ret[skip_first_n:-skip_last_n]
+
+# class ChessDataset(InMemoryDataset):
+#     def __init__(self, games=None, n_games=1_000):
+#         self.boards = dict()
+#         if games is None:
+#             df = my_data.parse(nrows=n_games)
+#             self.games = df.progress_apply(lambda row: my_data.get_game(row), axis=1).to_list()
+#             random.shuffle(self.games)
+
+#     def __len__(self):
+#         """approximate 40 moves per game"""
+#         return len(self.games) * 40
+    
+#     def __getitem__(self, ndx):
