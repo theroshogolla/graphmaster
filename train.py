@@ -7,22 +7,21 @@ import networkx as nx
 import random
 from torch.nn import Linear
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv
-from torch_geometric.nn import global_mean_pool
 import torch
 import chess
 from sklearn import metrics
 
 import data as my_data
 import graph as my_graph
+import model as my_model
 
 tqdm.pandas()
 
 CONFIG = {
-    'n_games': 100_000,
+    'n_games': 1_000,
     'test_split': 10,
     'batch_size': 256,
-    'hidden_channels': 256,
+    'n_hidden_ch': 256,
     'lr': 1e-3,
     'n_epochs': 1_000,
 }
@@ -43,8 +42,8 @@ for game in tqdm(train_games):
     for item in my_data.get_boards(game):
         board = item['board']
         win = int(item['win'])
-        graph = from_networkx(my_graph.chess_nx(board))
-        graph.x = graph.piece_value.unsqueeze(-1)
+        graph = from_networkx(my_graph.chess_nx(board, node_fns=my_graph.piece_onehot))
+        graph.x = graph.piece_onehot.unsqueeze(-1)
         graph.y = win
         train_graphs.append(graph)
 
@@ -54,8 +53,8 @@ for game in tqdm(test_games):
     for item in my_data.get_boards(game):
         board = item['board']
         win = int(item['win'])
-        graph = from_networkx(my_graph.chess_nx(board))
-        graph.x = graph.piece_value.unsqueeze(-1)
+        graph = from_networkx(my_graph.chess_nx(board, node_fns=my_graph.piece_onehot))
+        graph.x = graph.piece_onehot.unsqueeze(-1)
         graph.y = win
         test_graphs.append(graph)
 
@@ -85,37 +84,12 @@ test_loader = tg.loader.DataLoader(test_graphs, batch_size=CONFIG['batch_size'],
 for step, data in enumerate(train_loader):
     print(f'Step {step + 1}:')
     print('=======')
-    print(f'Number of graphs in the current batch: {data.num_graphs}')
+    print(f'Number of graphs in the first batch: {data.num_graphs}')
     print(data)
     print()
-    if step == 2: break
+    break
 
-class GCN(torch.nn.Module):
-    def __init__(self, n_node_features=1, hidden_channels=CONFIG['hidden_channels'], n_cls=2):
-        super(GCN, self).__init__()
-        self.conv1 = GCNConv(n_node_features, hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, hidden_channels)
-        self.conv3 = GCNConv(hidden_channels, hidden_channels)
-        self.lin = Linear(hidden_channels, n_cls)
-
-    def forward(self, x, edge_index, batch):
-        # 1. Obtain node embeddings 
-        x = self.conv1(x, edge_index)
-        x = x.relu()
-        x = self.conv2(x, edge_index)
-        x = x.relu()
-        x = self.conv3(x, edge_index)
-
-        # 2. Readout layer
-        x = global_mean_pool(x, batch)  # [batch_size, hidden_channels]
-
-        # 3. Apply a final classifier
-        x = F.dropout(x, p=0.5, training=self.training)
-        x = self.lin(x)
-        
-        return x
-
-model = GCN().to('cuda')
+model = my_model.GCN().to('cuda')
 print(model)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=CONFIG['lr'])
