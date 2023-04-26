@@ -36,12 +36,20 @@ FPATH = '/home/asy51/repos/graphmaster/dataset/all_with_filtered_anotations_sinc
 
 sign = lambda x: bool(x > 0) - bool(x < 0)
 
-def parse(fpath=FPATH, nrows=1000, skip_draws=True) -> pd.DataFrame:
-    df = pd.read_csv(fpath, engine='python', skiprows=4, sep='###', nrows=nrows*2)
+def parse(fpath=FPATH, n_games=1000, win_ratio=0.5, skip_draws=True) -> pd.DataFrame:
+    n_win = int(n_games * win_ratio)
+    n_loss = n_games - n_win
+    n_loss_seen = 0
+    df = pd.DataFrame()
+    for chunk in pd.read_csv(fpath, engine='python', skiprows=4, sep='###', chunksize=1000):
+        n_loss_seen += chunk.index.str.contains('0-1').sum()
+        df = pd.concat((df, chunk))
+        if n_loss_seen >= n_loss:
+            break
 
     df = df.reset_index()
     newcols = ['game_ndx', 'Date', 'Result', 'welo' ,'belo', 'len', 'date_c', 'resu_c',
-               'welo_c', 'belo_c', 'edate_c', 'setup', 'fen', 'resu2_c', 'oyrange', 'bad_len']
+                'welo_c', 'belo_c', 'edate_c', 'setup', 'fen', 'resu2_c', 'oyrange', 'bad_len']
     df[newcols] = df['index'].str.split(' ', expand=True).iloc[:,:-1]
     df['moves'] = df.iloc[:,1]
     df['moves'] = df['moves'].str.replace('[WB]\d+?\.', '', regex=True)
@@ -65,9 +73,9 @@ def parse(fpath=FPATH, nrows=1000, skip_draws=True) -> pd.DataFrame:
         df = df[(df['Result'] == 0) | (df['Result'] == 1)]
 
     df = df.iloc[:,2:].set_index('game_ndx')
-    df = df[(~df['setup']) & (~df['bad_len']) & (df['moves'].notna()) & (df['len'] < 100)]
-    # df = df[(df['setup'] == 'setup_false') & (df['bad_len'] == 'blen_false') & (df['moves'].notna())]
-    return df.sample(n=nrows)
+    df = df[(~df['setup']) & (~df['bad_len']) & (df['moves'].notna()) & (df['len'] < 250)]
+    df = pd.concat((df[df['Result'] == 0].sample(n_win), df[df['Result'] == 1].sample(n_loss)))
+    return df.sample(frac=1) # shuffle
 
 def get_game(row: pd.Series):
     moves = io.StringIO(row['moves'])
@@ -86,6 +94,7 @@ def get_boards(g: chess.pgn.Game, skip_first_n=10, skip_last_n=10):
     while cur.next() is not None:
         ret.append(cur.board())
         cur = cur.next()
+    if skip_first_n == 0 and skip_last_n == 0: return ret
     return ret[skip_first_n:-skip_last_n]
 
 def one_hot(cat_map: dict):
@@ -166,7 +175,7 @@ class ChessDataset:
         if df is not None:
             pass
         elif n_games is not None:
-            df = parse(nrows=n_games)
+            df = parse(n_games=n_games)
         else:
             raise ValueError # error
         

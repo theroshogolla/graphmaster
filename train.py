@@ -27,7 +27,7 @@ CONFIG = vars(parser.parse_args())
 print(CONFIG)
 
 ### DATA
-df = my_data.parse(nrows=CONFIG['n_games'], skip_draws=True)
+df = my_data.parse(n_games=CONFIG['n_games'], skip_draws=True)
 df_train, df_test = train_test_split(df, test_size=CONFIG['test_split'])
 
 if CONFIG['net'] == 'gcn':
@@ -65,7 +65,7 @@ def train():
         optimizer.zero_grad()  # Clear gradients.
     pred = torch.cat(pred).to(int).detach().cpu()
     y = torch.cat(y).to(int).detach().cpu()
-    tn, fp, fn, tp = confusion_matrix(y, pred, normalize='all').ravel()
+    tn, fp, fn, tp = confusion_matrix(y, pred, normalize='all', labels=(0,1)).ravel()
     acc = accuracy_score(y, pred, normalize=True)
     print(f'TRAIN: tn:{tn:.3f} fp:{fp:.3f} fn:{fn:.3f} tp:{tp:.3f} acc:{acc:.3f}')
 
@@ -80,7 +80,7 @@ def test():
         y.append(data.y.flatten())
     pred = torch.cat(pred).to(int).detach().cpu()
     y = torch.cat(y).to(int).detach().cpu()
-    tn, fp, fn, tp = confusion_matrix(y, pred, normalize='all').ravel()
+    tn, fp, fn, tp = confusion_matrix(y, pred, normalize='all', labels=(0,1)).ravel()
     acc = accuracy_score(y, pred, normalize=True)
     print(f'TEST:  tn:{tn:.3f} fp:{fp:.3f} fn:{fn:.3f} tp:{tp:.3f} acc:{acc:.3f}')
 
