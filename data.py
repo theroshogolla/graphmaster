@@ -18,6 +18,10 @@ import chess
 import chess.pgn
 from collections import OrderedDict
 import torch
+from torch.nn import functional as F
+import einops
+
+import pred as my_pred
 
 tqdm.pandas()
 
@@ -31,10 +35,18 @@ PIECE_VAL = {
     chess.QUEEN: 9.50,
     chess.KING: 200.00, 
 }
+PLAYER_CUR = 1
+PLAYER_OPP = 2
 
 FPATH = '/home/asy51/repos/graphmaster/dataset/all_with_filtered_anotations_since1998.txt'
 
 sign = lambda x: bool(x > 0) - bool(x < 0)
+
+def one_hot(cat_map: dict):
+    cat_arr = np.array(list(cat_map.values()))
+    ret = np.zeros((cat_arr.size, cat_arr.max() + 1))
+    ret[np.arange(cat_arr.size), cat_arr] = 1
+    return ret
 
 def parse(fpath=FPATH, n_games=1000, win_ratio=0.5, skip_draws=True) -> pd.DataFrame:
     n_win = int(n_games * win_ratio)
@@ -97,12 +109,6 @@ def get_boards(g: chess.pgn.Game, skip_first_n=10, skip_last_n=10):
     if skip_first_n == 0 and skip_last_n == 0: return ret
     return ret[skip_first_n:-skip_last_n]
 
-def one_hot(cat_map: dict):
-    cat_arr = np.array(list(cat_map.values()))
-    ret = np.zeros((cat_arr.size, cat_arr.max() + 1))
-    ret[np.arange(cat_arr.size), cat_arr] = 1
-    return ret
-
 ### node attr functions
 def piece_value(b: chess.Board, val_map=PIECE_VAL):
     types = piece_type(b)
@@ -112,7 +118,7 @@ def piece_color(b: chess.Board):
     """piece belonging to current player has index=1"""
     colors = {i: 0 for i in range(64)}
     for loc, piece in b.piece_map().items():
-        colors[loc] = 1 if piece.color == b.turn else 2
+        colors[loc] = PLAYER_CUR if piece.color == b.turn else PLAYER_OPP
     return one_hot(colors)
 
 def piece_type(b: chess.Board):
@@ -122,56 +128,85 @@ def piece_type(b: chess.Board):
     return one_hot(types)
 
 def piece_color_type(b: chess.Board):
+    """64 x (3 + 7)"""
     return np.concatenate([piece_color(b), piece_type(b)], axis=1)
 
 ### edge functions
-def mobility(b: chess.Board, both=False) -> dict:
+def mobility(b: chess.Board, both=True):
     """
+    shape = ? x 4 = [n_moves x (from_sq, to_sq, from_player, to_player)]
     `both`: get graph for both players (current turn AND next turn)
-    node are int locations with 'piece' attribute e.g. `4: {'piece': K}`
     TODO: separate graph (mobility) & attr (piece) collection
     """
-    moves = [(m.from_square, m.to_square) for m in list(b.legal_moves)]
+    moves = [(m.from_square, m.to_square, PLAYER_CUR, 0 if b.piece_at(m.to_square) is None else PLAYER_OPP) for m in list(b.legal_moves)]
     if both:
         b.push(chess.Move.null()) # pass turn
-        moves += [(m.from_square, m.to_square) for m in list(b.legal_moves)]
+        moves += [(m.from_square, m.to_square, PLAYER_OPP, 0 if b.piece_at(m.to_square) is None else PLAYER_CUR) for m in list(b.legal_moves)]
         b.pop() # undo pass turn
-    return moves
+    return np.array(moves)
 
-def support(b: chess.Board):
-    """dict of {from-piece}"""
+def support(b: chess.Board, both=True):
+    """shape = ? x 4 = [n_moves x (from_sq, to_sq, from_player, to_player)]"""
     piece_map = b.piece_map()
-    return {piece: [(target, piece_map[piece].color == piece_map[target].color)
-                for target in b.attacks(piece).intersection(piece_map.keys())]
-                    for piece in piece_map if piece_map[piece].color == b.turn}
+    moves = [(piece, target, PLAYER_CUR, PLAYER_CUR if piece_map[piece].color == piece_map[target].color else PLAYER_OPP)
+        for piece in piece_map if piece_map[piece].color == b.turn
+            for target in b.attacks(piece).intersection(piece_map.keys())]
+    if both:
+        b.push(chess.Move.null()) # pass turn
+        moves += [(piece, target, PLAYER_OPP, PLAYER_OPP if piece_map[piece].color == piece_map[target].color else PLAYER_CUR)
+        for piece in piece_map if piece_map[piece].color == b.turn
+            for target in b.attacks(piece).intersection(piece_map.keys())]
+        b.pop() # undo pass turn
+    return np.array(moves)
 
-def chess_nx(b: chess.Board, edge_fn=mobility):
-    g = nx.DiGraph()
-    g.add_nodes_from(range(64))
-    g.add_edges_from(edge_fn(b))
-    return g
+def position(b: chess.Board, both=True):
+    """shape = ? x 4 [n_moves x (from_sq, to_sq, from_player, to_player)]"""
+    mob = mobility(b, both)
+    sup = support(b, both)
+    if sup.size == 0: return mob
+    return np.unique(np.concatenate((mob, sup), axis=0), axis=0)
 
-def chess_pyg(g: chess.pgn.Game, b: chess.Board, edge_fn=mobility, node_fn=piece_color_type):
-    g = chess_nx(b, edge_fn)
-    pyg = torch_geometric.utils.convert.from_networkx(g)
-    pyg.x = node_fn(b)
-    return pyg
+# def chess_nx(b: chess.Board, edge_fn=mobility):
+#     g = nx.DiGraph()
+#     edges = edge_fn(b)
+    
+#     g.add_nodes_from(range(64))
+#     g.add_edges_from(edge_fn(b))
+#     return g
 
-def pyg_data(g: chess.pgn.Game, b: chess.Board, edge_fn=mobility, node_fn=piece_color_type) -> torch_geometric.data.Data:
-    return torch_geometric.data.Data(
-        x=torch.tensor(node_fn(b), dtype=torch.float32),
-        edge_index=torch.tensor(edge_fn(b), dtype=torch.long).T,
-        y=torch.tensor(int(g.headers['Result']) == b.turn, dtype=torch.float32)
-    )
+# def chess_pyg(g: chess.pgn.Game, b: chess.Board, edge_fn=mobility, node_fn=piece_color_type):
+#     g = chess_nx(b, edge_fn)
+#     pyg = torch_geometric.utils.convert.from_networkx(g)
+#     pyg.x = node_fn(b)
+#     return pyg
 
-def tabular_data(g: chess.pgn.Game, b: chess.Board, node_fn=piece_color_type) -> torch.Tensor:
-    return {'x': node_fn(b), 'y': torch.tensor(int(g.headers['Result']) == b.turn, dtype=torch.float32)}
+### data transforms
+def pyg_data(g: chess.pgn.Game, b: chess.Board, edge_fn=mobility, node_fn=piece_color_type, engine=None) -> torch_geometric.data.Data:
+    edges = edge_fn(b)
+    edge_index = edges[:,:2]
+    edge_attr = einops.rearrange(F.one_hot(torch.tensor(edges[:,2:]), num_classes=4), 'n feat onehot -> n (feat onehot)')
+    if engine is None:
+        y = torch.tensor(int(g.headers['Result']) == b.turn, dtype=torch.float32)
+    else:
+        y = my_pred.win_pred(b, engine=engine)
+    return {'x': torch_geometric.data.Data(
+                x=torch.tensor(node_fn(b), dtype=torch.float32),
+                edge_index=torch.tensor(edge_index, dtype=torch.long).T,
+                edge_attr=edge_attr),
+            'y': y}
+
+def tabular_data(g: chess.pgn.Game, b: chess.Board, node_fn=piece_color_type, engine=None) -> torch.Tensor:
+    if engine is None:
+        y = torch.tensor(int(g.headers['Result']) == b.turn, dtype=torch.float32)
+    else:
+        y = my_pred.win_pred(b, engine=engine)
+    return {'x': einops.rearrange(torch.tensor(node_fn(b), dtype=torch.float32), 'sq feat -> (sq feat)'),
+            'y': y}
 
 class ChessDataset:
-    def __init__(self, df=None, n_games=1_000, skip_first_n=10, skip_last_n=10, net='gcn'):
+    def __init__(self, df=None, n_games=1_000, skip_first_n=10, skip_last_n=10):
         self.skip_first_n = skip_first_n
         self.skip_last_n = skip_last_n
-        self.net = net
         if df is not None:
             pass
         elif n_games is not None:
@@ -208,14 +243,25 @@ class ChessDataset:
         return self.__getitem__(ndx)
     
 class GraphDataset(ChessDataset):
+    def __init__(self, df=None, n_games=1000, skip_first_n=10, skip_last_n=10, edge_fn=position, node_fn=piece_color_type, engine=None):
+        super().__init__(df, n_games, skip_first_n, skip_last_n)
+        self.edge_fn = edge_fn
+        self.node_fn = node_fn
+        self.engine = engine
+
     def __getitem__(self, ndx):
         g,b = super().__getitem__(ndx)
-        return pyg_data(g, b)
+        return pyg_data(g, b, edge_fn=self.edge_fn, node_fn=self.node_fn, engine=self.engine)
     
 class TabularDataset(ChessDataset):
+    def __init__(self, df=None, n_games=1000, skip_first_n=10, skip_last_n=10, node_fn=piece_color_type, engine=None):
+        super().__init__(df, n_games, skip_first_n, skip_last_n)
+        self.node_fn = node_fn
+        self.engine = engine
+
     def __getitem__(self, ndx):
         g,b = super().__getitem__(ndx)
-        return tabular_data(g, b)
+        return tabular_data(g, b, node_fn=self.node_fn, engine=self.engine)
     
 class RandomDataset:
     def __init__(self):

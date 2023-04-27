@@ -15,7 +15,8 @@ class GCN(torch.nn.Module):
         self.lin = nn.Linear(n_hidden_ch, n_cls)
         self.sigmoid = nn.Sigmoid() if sigmoid else nn.Identity()
 
-    def forward(self, x, edge_index, batch):
+    def forward(self, data):
+        x, edge_index, batch = data.x, data.edge_index, data.batch
         # 1. Obtain node embeddings 
         x = self.conv1(x, edge_index)
         x = x.relu()
