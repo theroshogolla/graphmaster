@@ -14,7 +14,7 @@ def init_engine(engine_str):
 
 def win_pred(b: chess.Board, engine, pov='turn', time=0.01):
     """ties split in half to each player"""
-    w = engine.analyse(b, chess.engine.Limit(time=time), info=chess.engine.INFO_SCORE)['score'].wdl().white().expectation()
+    w = float(engine.analyse(b, chess.engine.Limit(time=time), info=chess.engine.INFO_SCORE)['score'].wdl().white().expectation())
     if pov == 'turn':
         if b.turn is False: return 1. - w
         return w

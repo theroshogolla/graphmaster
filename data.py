@@ -188,7 +188,7 @@ def pyg_data(g: chess.pgn.Game, b: chess.Board, edge_fn=mobility, node_fn=piece_
     if engine is None:
         y = torch.tensor(int(g.headers['Result']) == b.turn, dtype=torch.float32)
     else:
-        y = my_pred.win_pred(b, engine=engine)
+        y = torch.tensor(my_pred.win_pred(b, engine=engine), dtype=torch.float32)
     return {'x': torch_geometric.data.Data(
                 x=torch.tensor(node_fn(b), dtype=torch.float32),
                 edge_index=torch.tensor(edge_index, dtype=torch.long).T,
@@ -199,7 +199,7 @@ def tabular_data(g: chess.pgn.Game, b: chess.Board, node_fn=piece_color_type, en
     if engine is None:
         y = torch.tensor(int(g.headers['Result']) == b.turn, dtype=torch.float32)
     else:
-        y = my_pred.win_pred(b, engine=engine)
+        y = torch.tensor(my_pred.win_pred(b, engine=engine), dtype=torch.float32)
     return {'x': einops.rearrange(torch.tensor(node_fn(b), dtype=torch.float32), 'sq feat -> (sq feat)'),
             'y': y}
 
