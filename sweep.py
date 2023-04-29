@@ -3,7 +3,6 @@ import multiprocessing
 import torch
 import train as my_train
 
-
 # DEFAULT_CONFIG = {'n_games': 1000,
 #     'test_split': 0.1,
 #     'batch_size': 256,
@@ -26,12 +25,12 @@ def init():
         'method': 'grid',
         'name': 'muh_sweep',
         'parameters': {
-            'batch_size': {'values': [32, 256]},
-            'net': {'values': ['gcn', 'fc']},
+            # 'batch_size': {'values': [32, 256]},
+            'net': {'values': ['gcn', 'graphsage', 'gat', 'edgecnn', 'gin']},
             # 'n_hidden_ch': {'values': [256, 1024]},
             # 'lr': {'values': [1e-3, 1e-4]},
             # 'dropout_rate': {'values': [0.2, 0.5]},
-            'engine': {'values': ['stockfish', 'actual_result']},
+            # 'engine': {'values': ['stockfish', 'actual_result']},
         }
     }
     sweep_id = wandb.sweep(sweep=sweep_config, project='chess')
@@ -53,6 +52,7 @@ def agent(sweep_id):
 
 # cmdline config
 CONFIG = my_train.cmdline_config()
+NUM_WORKERS = 5
 
 if __name__ == '__main__':
     torch.multiprocessing.set_start_method('spawn')
@@ -60,7 +60,7 @@ if __name__ == '__main__':
     sweep_id = init()
     # spawn and run 4 agents for the sweep
     procs = []
-    for _ in range(8):
+    for _ in range(NUM_WORKERS):
         p = multiprocessing.Process(target=agent, args=[sweep_id])
         p.start()
         procs.append(p)

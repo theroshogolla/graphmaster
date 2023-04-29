@@ -1,3 +1,4 @@
+from IPython import embed
 """
 Read ChessDB dataset from
 https://www.kaggle.com/datasets/milesh1/35-million-chess-games
@@ -48,6 +49,7 @@ def one_hot(cat_map: dict):
     ret[np.arange(cat_arr.size), cat_arr] = 1
     return ret
 
+### csv -> df -> chess.Game -> chess.Board
 def parse(fpath=FPATH, n_games=1000, win_ratio=0.5, skip_draws=True) -> pd.DataFrame:
     n_win = int(n_games * win_ratio)
     n_loss = n_games - n_win
@@ -166,53 +168,20 @@ def position(b: chess.Board, both=True):
     if sup.size == 0: return mob
     return np.unique(np.concatenate((mob, sup), axis=0), axis=0)
 
-# def chess_nx(b: chess.Board, edge_fn=mobility):
-#     g = nx.DiGraph()
-#     edges = edge_fn(b)
-    
-#     g.add_nodes_from(range(64))
-#     g.add_edges_from(edge_fn(b))
-#     return g
-
-# def chess_pyg(g: chess.pgn.Game, b: chess.Board, edge_fn=mobility, node_fn=piece_color_type):
-#     g = chess_nx(b, edge_fn)
-#     pyg = torch_geometric.utils.convert.from_networkx(g)
-#     pyg.x = node_fn(b)
-#     return pyg
-
-### data transforms
-def pyg_data(g: chess.pgn.Game, b: chess.Board, edge_fn=mobility, node_fn=piece_color_type, engine=None) -> torch_geometric.data.Data:
-    edges = edge_fn(b)
-    edge_index = edges[:,:2]
-    edge_attr = einops.rearrange(F.one_hot(torch.tensor(edges[:,2:]), num_classes=4), 'n feat onehot -> n (feat onehot)')
-    if engine is None:
-        y = torch.tensor(int(g.headers['Result']) == b.turn, dtype=torch.float32)
-    else:
-        y = torch.tensor(my_pred.win_pred(b, engine=engine), dtype=torch.float32)
-    return {'x': torch_geometric.data.Data(
-                x=torch.tensor(node_fn(b), dtype=torch.float32),
-                edge_index=torch.tensor(edge_index, dtype=torch.long).T,
-                edge_attr=edge_attr),
-            'y': y}
-
-def tabular_data(g: chess.pgn.Game, b: chess.Board, node_fn=piece_color_type, engine=None) -> torch.Tensor:
-    if engine is None:
-        y = torch.tensor(int(g.headers['Result']) == b.turn, dtype=torch.float32)
-    else:
-        y = torch.tensor(my_pred.win_pred(b, engine=engine), dtype=torch.float32)
-    return {'x': einops.rearrange(torch.tensor(node_fn(b), dtype=torch.float32), 'sq feat -> (sq feat)'),
-            'y': y}
-
 class ChessDataset:
-    def __init__(self, df=None, n_games=1_000, skip_first_n=10, skip_last_n=10):
+    def __init__(self, df=None, config=None, skip_first_n=10, skip_last_n=10):
         self.skip_first_n = skip_first_n
         self.skip_last_n = skip_last_n
+        if config is not None:
+            self.node_fn = globals()[config['node_fn']]
+            self.edge_fn = globals()[config['edge_fn']]
+
         if df is not None:
             pass
-        elif n_games is not None:
-            df = parse(n_games=n_games)
+        elif config is not None:
+            df = parse(n_games=config['n_games'])
         else:
-            raise ValueError # error
+            raise ValueError
         
         df = df.drop(df[df['len'] <= skip_first_n + skip_last_n].index) # avoid copy vs. view warning
         df['move_ndx'] = df.apply(lambda row: list(range(skip_first_n, int(row['len']) - skip_last_n)), axis=1)
@@ -243,25 +212,38 @@ class ChessDataset:
         return self.__getitem__(ndx)
     
 class GraphDataset(ChessDataset):
-    def __init__(self, df=None, n_games=1000, skip_first_n=10, skip_last_n=10, edge_fn=position, node_fn=piece_color_type, engine=None):
-        super().__init__(df, n_games, skip_first_n, skip_last_n)
-        self.edge_fn = edge_fn
-        self.node_fn = node_fn
+    def __init__(self, df=None, config=None, skip_first_n=10, skip_last_n=10, engine=None):
+        super().__init__(df, config, skip_first_n, skip_last_n)
         self.engine = engine
 
     def __getitem__(self, ndx):
         g,b = super().__getitem__(ndx)
-        return pyg_data(g, b, edge_fn=self.edge_fn, node_fn=self.node_fn, engine=self.engine)
+        edges = self.edge_fn(b)
+        edge_index = edges[:,:2]
+        edge_attr = einops.rearrange(F.one_hot(torch.tensor(edges[:,2:]), num_classes=4), 'n feat onehot -> n (feat onehot)')
+        if self.engine is None:
+            y = torch.tensor(int(g.headers['Result']) == b.turn, dtype=torch.float32)
+        else:
+            y = torch.tensor(my_pred.win_pred(b, engine=self.engine), dtype=torch.float32)
+        return {'x': torch_geometric.data.Data(
+                    x=torch.tensor(self.node_fn(b), dtype=torch.float32),
+                    edge_index=torch.tensor(edge_index, dtype=torch.long).T,
+                    edge_attr=edge_attr),
+                'y': y}
     
 class TabularDataset(ChessDataset):
-    def __init__(self, df=None, n_games=1000, skip_first_n=10, skip_last_n=10, node_fn=piece_color_type, engine=None):
-        super().__init__(df, n_games, skip_first_n, skip_last_n)
-        self.node_fn = node_fn
+    def __init__(self, df=None, config=None, skip_first_n=10, skip_last_n=10, engine=None):
+        super().__init__(df, config, skip_first_n, skip_last_n)
         self.engine = engine
 
     def __getitem__(self, ndx):
         g,b = super().__getitem__(ndx)
-        return tabular_data(g, b, node_fn=self.node_fn, engine=self.engine)
+        if self.engine is None:
+            y = torch.tensor(int(g.headers['Result']) == b.turn, dtype=torch.float32)
+        else:
+            y = torch.tensor(my_pred.win_pred(b, engine=self.engine), dtype=torch.float32)
+        return {'x': einops.rearrange(torch.tensor(self.node_fn(b), dtype=torch.float32), 'sq feat -> (sq feat)'),
+                'y': y}
     
 class RandomDataset:
     def __init__(self):

@@ -56,3 +56,16 @@ class DumbNet(torch.nn.Module):
         x = self.lin(x)
         x = self.sigmoid(x)
         return x
+    
+class GraphClf(torch.nn.Module):
+    def __init__(self, core, sigmoid=True):
+        super(GraphClf, self).__init__()
+        self.core = core
+        self.sigmoid = nn.Sigmoid() if sigmoid else nn.Identity()
+
+    def forward(self, data):
+        x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
+        x = self.core(x, edge_index, edge_attr=edge_attr)
+        x = global_mean_pool(x, batch)
+        x = self.sigmoid(x)
+        return x
