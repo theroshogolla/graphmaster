@@ -7,9 +7,11 @@ import torch
 import torch.utils.data
 import argparse
 import wandb
+import numpy as np
+import os
 
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.metrics import accuracy_score, confusion_matrix, roc_curve, roc_auc_score
 
 import data as my_data
 import model as my_model
@@ -19,24 +21,28 @@ tqdm.pandas()
 
 def cmdline_config():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-n', '--n_games', default=1_000, type=int)
-    parser.add_argument('--test_split', default=0.1, type=float)
+    parser.add_argument('-n', '--n_games', default=10_000, type=int)
+    parser.add_argument('--test_split', default=0.2, type=float)
     parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--net', default='gcn', type=str)
+    parser.add_argument('--loss', default='bce', type=str)
+
     parser.add_argument('--n_hidden_ch', default=512, type=int)
     parser.add_argument('--lr', default=1e-3, type=float)
     parser.add_argument('-e', '--n_epochs', default=1_000, type=int)
     parser.add_argument('--pred_thresh', default=0.5, type=float)
-    parser.add_argument('--dropout_rate', default=0.2, type=float)
+    parser.add_argument('--dropout_rate', default=0.25, type=float)
     parser.add_argument('--node_fn', default='piece_color_type', type=str)
     parser.add_argument('--edge_fn', default='position', type=str)
-    parser.add_argument('--target', default='actual_result', type=str)
+    parser.add_argument('--target', default='actual', type=str)
     parser.add_argument('--pred_time', default=0.01, type=float)
     parser.add_argument('--wandb', action='store_true')
+    parser.add_argument('--gpu', default='0', type=str)
     config = vars(parser.parse_args())
     return config
 
 def main(config, internal_wandb=True):
+    os.environ["CUDA_VISIBLE_DEVICES"] = config['gpu']
     if config['node_fn'] == 'piece_color_type':
         attrs_per_node = 10
     elif config['node_fn'] == 'piece_color':
@@ -49,7 +55,7 @@ def main(config, internal_wandb=True):
         engine = my_pred.init_engine('stockfish')
     elif config['target'] == 'lc0':
         engine = my_pred.init_engine('lc0')
-    elif config['target'] == 'actual_result':
+    elif config['target'] == 'actual':
         pass
     else: raise ValueError(f"target:{config['target']} not implemented")
 
@@ -63,8 +69,9 @@ def main(config, internal_wandb=True):
     print(f"Using node_fn={config['node_fn']}(); edge_fn={config['edge_fn']}()")
 
     ### DATA
-    df = my_data.parse(n_games=config['n_games'], skip_draws=True)
-    df_train, df_test = train_test_split(df, test_size=config['test_split'])
+    # df = my_data.parse(n_games=config['n_games'], skip_draws=True)
+    df = my_data.parse_cleaned(n_games=config['n_games'])
+    df_train, df_test = train_test_split(df, test_size=config['test_split'], stratify=df['Result'])
 
     if config['net'] == 'fc':
         ds_train = my_data.TabularDataset(df=df_train, config=config, engine=engine)
@@ -96,9 +103,27 @@ def main(config, internal_wandb=True):
 
     model = model.to('cuda')
     optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
-    criterion = torch.nn.BCELoss()
+    if config['loss'] == 'bce':
+        criterion = torch.nn.BCELoss()
+    elif config['loss'] == 'focal':
+        criterion = my_model.focal_loss
     print(model)
 
+    def metrics(y, pred, pred_thresh, prefix='train_'):
+        pred_bool = (pred > pred_thresh).float()
+        ret = dict(zip(['tn', 'fp', 'fn', 'tp'],
+                       confusion_matrix(y, pred_bool, normalize='all', labels=(0,1)).ravel()))
+        ret.update({'acc': accuracy_score(y, pred_bool, normalize=True)})
+        ret.update({'roc_auc': roc_auc_score(y, pred)})
+        pred_neg = 1 - pred
+        pred_comb = torch.concat((pred.unsqueeze(-1), pred_neg.unsqueeze(-1)), axis=-1)
+        # hotfix: break after one iter of wandb.plot.roc_curve/pr_curve:indices_to_plot to remove pred_neg
+        # also remove warning for n_sample > 10k
+        ret.update({'roc_curve': wandb.plot.roc_curve(y, pred_comb)})
+        ret.update({'pr_curve': wandb.plot.pr_curve(y, pred_comb)})
+        # table = wandb.Table(data=np.array(roc_curve(y, pred)).T)
+        # ret.update({'roc_curve': wandb.plot.line(table, x='False Positive Rate', y='True Positive Rate')})
+        wandb.log({f'{prefix}{k}':v for k,v in ret.items()})
 
     def train():
         model.train()
@@ -108,19 +133,15 @@ def main(config, internal_wandb=True):
             x = data['x'].cuda()
             y = data['y'].cuda()
             out = model(x)  # Perform a single forward pass.
-            pred_accum.append(out.squeeze().flatten() > config['pred_thresh'])
+            pred_accum.append(out.squeeze().flatten())
             y_accum.append(y.flatten())
-            # embed()
             loss = criterion(out.squeeze(), y)  # Compute the loss.
             loss.backward()  # Derive gradients.
             optimizer.step()  # Update parameters based on gradients.
             optimizer.zero_grad()  # Clear gradients.
-        pred_accum = torch.cat(pred_accum).to(int).detach().cpu()
+        pred_accum = torch.cat(pred_accum).detach().cpu()
         y_accum = torch.cat(y_accum).to(int).detach().cpu()
-        m = dict(zip(['train_tn', 'train_fp', 'train_fn', 'train_tp'], confusion_matrix(y_accum, pred_accum, normalize='all', labels=(0,1)).ravel()))
-        m.update({'train_acc': accuracy_score(y_accum, pred_accum, normalize=True)})
-        print(f"TRAIN: tn:{m['train_tn']:.3f} fp:{m['train_fp']:.3f} fn:{m['train_fn']:.3f} tp:{m['train_tp']:.3f} acc:{m['train_acc']:.3f}")
-        wandb.log(m)
+        return y_accum, pred_accum
 
     def test():
         model.eval()
@@ -130,18 +151,18 @@ def main(config, internal_wandb=True):
             x = data['x'].cuda()
             y = data['y'].cuda()
             out = model(x)
-            pred_accum.append(out.squeeze().flatten() > config['pred_thresh'])
+            pred_accum.append(out.squeeze().flatten())
             y_accum.append(y.flatten())
-        pred_accum = torch.cat(pred_accum).to(int).detach().cpu()
+        pred_accum = torch.cat(pred_accum).detach().cpu()
         y_accum = torch.cat(y_accum).to(int).detach().cpu()
-        m = dict(zip(['test_tn', 'test_fp', 'test_fn', 'test_tp'], confusion_matrix(y_accum, pred_accum, normalize='all', labels=(0,1)).ravel()))
-        m.update({'test_acc': accuracy_score(y_accum, pred_accum, normalize=True)})
-        print(f"TRAIN: tn:{m['test_tn']:.3f} fp:{m['test_fp']:.3f} fn:{m['test_fn']:.3f} tp:{m['test_tp']:.3f} acc:{m['test_acc']:.3f}")
-        wandb.log(m)
+        return y_accum, pred_accum
 
     for epoch in range(1, config['n_epochs']):
-        train()
-        test()
+        y, pred = train()
+        print(y.shape, pred.shape)
+        metrics(y, pred, config['pred_thresh'])
+        y, pred = test()
+        metrics(y, pred, config['pred_thresh'])
 
 if __name__ == '__main__':
     config = cmdline_config()

@@ -4,6 +4,20 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+# from torchvision.ops.sigmoid_focal_loss
+def focal_loss(inputs: torch.Tensor, targets: torch.Tensor,
+    alpha: float = .5, gamma: float = 2) -> torch.Tensor:
+    p = inputs
+    ce_loss = F.binary_cross_entropy(inputs, targets, reduction="none")
+    p_t = p * targets + (1 - p) * (1 - targets)
+    loss = ce_loss * ((1 - p_t) ** gamma)
+
+    if alpha >= 0:
+        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+        loss = alpha_t * loss
+
+    return loss.mean()
+
 class GCN(torch.nn.Module):
     def __init__(self, config, n_node_features=1, n_cls=1, sigmoid=True):
         self.config = config

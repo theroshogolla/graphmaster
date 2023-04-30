@@ -41,6 +41,7 @@ PLAYER_OPP = 2
 
 FPATH = '/home/asy51/repos/graphmaster/dataset/all_with_filtered_anotations_since1998.txt'
 
+FPATH_CLEAN = '/home/asy51/repos/graphmaster/dataset/cleaned.csv'
 sign = lambda x: bool(x > 0) - bool(x < 0)
 
 def one_hot(cat_map: dict):
@@ -90,6 +91,17 @@ def parse(fpath=FPATH, n_games=1000, win_ratio=0.5, skip_draws=True) -> pd.DataF
     df = df[(~df['setup']) & (~df['bad_len']) & (df['moves'].notna()) & (df['len'] < 250)]
     df = pd.concat((df[df['Result'] == 0].sample(n_win), df[df['Result'] == 1].sample(n_loss)))
     return df.sample(frac=1) # shuffle
+
+# cf = df[(df['welo']>2550) & (df['belo']>2550)]
+# cf = cf[(cf['Result'] == 0) | (cf['Result'] == 1)]
+# cf = cf[(~cf['setup']) & (~cf['bad_len']) & (cf['moves'].notna()) & (cf['len'] < 250)]
+def parse_cleaned(fpath=FPATH_CLEAN, n_games=10_000, win_ratio=0.5):
+    n_win = int(n_games * win_ratio)
+    n_loss = n_games - n_win
+    df = pd.read_csv(fpath).reset_index(names='game_ndx')
+    df = df[df['len']  > 50]
+    df = pd.concat((df[df['Result'] == 0].sample(n_win), df[df['Result'] == 1].sample(n_loss)))
+    return df
 
 def get_game(row: pd.Series):
     moves = io.StringIO(row['moves'])
@@ -215,6 +227,7 @@ class GraphDataset(ChessDataset):
     def __init__(self, df=None, config=None, skip_first_n=10, skip_last_n=10, engine=None):
         super().__init__(df, config, skip_first_n, skip_last_n)
         self.engine = engine
+        self.config = config
 
     def __getitem__(self, ndx):
         g,b = super().__getitem__(ndx)
@@ -224,7 +237,7 @@ class GraphDataset(ChessDataset):
         if self.engine is None:
             y = torch.tensor(int(g.headers['Result']) == b.turn, dtype=torch.float32)
         else:
-            y = torch.tensor(my_pred.win_pred(b, engine=self.engine), dtype=torch.float32)
+            y = torch.tensor(my_pred.win_pred(b, engine=self.engine, time=self.config['pred_time']), dtype=torch.float32)
         return {'x': torch_geometric.data.Data(
                     x=torch.tensor(self.node_fn(b), dtype=torch.float32),
                     edge_index=torch.tensor(edge_index, dtype=torch.long).T,
@@ -235,13 +248,14 @@ class TabularDataset(ChessDataset):
     def __init__(self, df=None, config=None, skip_first_n=10, skip_last_n=10, engine=None):
         super().__init__(df, config, skip_first_n, skip_last_n)
         self.engine = engine
+        self.config = config
 
     def __getitem__(self, ndx):
         g,b = super().__getitem__(ndx)
         if self.engine is None:
             y = torch.tensor(int(g.headers['Result']) == b.turn, dtype=torch.float32)
         else:
-            y = torch.tensor(my_pred.win_pred(b, engine=self.engine), dtype=torch.float32)
+            y = torch.tensor(my_pred.win_pred(b, engine=self.engine, time=self.config['pred_time']), dtype=torch.float32)
         return {'x': einops.rearrange(torch.tensor(self.node_fn(b), dtype=torch.float32), 'sq feat -> (sq feat)'),
                 'y': y}
     

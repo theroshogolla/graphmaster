@@ -14,7 +14,7 @@ import train as my_train
 #     'dropout_rate': 0.2,
 #     'node_fn': 'piece_color_type',
 #     'edge_fn': 'position',
-#     'engine': 'actual_result',
+#     'engine': 'actual',
 #     'pred_time': 0.01,
 #     'wandb': False
 # }
@@ -26,11 +26,12 @@ def init():
         'name': 'muh_sweep',
         'parameters': {
             # 'batch_size': {'values': [32, 256]},
-            'net': {'values': ['gcn', 'graphsage', 'gat', 'edgecnn', 'gin']},
+            'net': {'values': ['fc', 'gcn', 'graphsage', 'gat',]},
             # 'n_hidden_ch': {'values': [256, 1024]},
-            # 'lr': {'values': [1e-3, 1e-4]},
+            'lr': {'values': [1e-2, 1e-4]},
             # 'dropout_rate': {'values': [0.2, 0.5]},
-            # 'engine': {'values': ['stockfish', 'actual_result']},
+            # 'target': {'values': ['stockfish', 'actual']},
+            # 'loss': {'values': ['bce', 'focal']},
         }
     }
     sweep_id = wandb.sweep(sweep=sweep_config, project='chess')
@@ -52,13 +53,14 @@ def agent(sweep_id):
 
 # cmdline config
 CONFIG = my_train.cmdline_config()
-NUM_WORKERS = 5
+NUM_WORKERS = 8
 
 if __name__ == '__main__':
+    # multiprocessing.set_start_method('spawn')
     torch.multiprocessing.set_start_method('spawn')
     # initialize sweep
     sweep_id = init()
-    # spawn and run 4 agents for the sweep
+    # spawn and run _ agents for the sweep
     procs = []
     for _ in range(NUM_WORKERS):
         p = multiprocessing.Process(target=agent, args=[sweep_id])
