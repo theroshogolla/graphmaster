@@ -3,6 +3,9 @@ import chess
 import chess.pgn
 import chess.svg
 import numpy as np
+from sklearn.metrics import accuracy_score, confusion_matrix, roc_curve, roc_auc_score
+import torch
+import wandb
 
 import pred as my_pred
 import data as my_data
@@ -40,3 +43,20 @@ def svg(b: chess.Board, edges=[], size=500):
         size=size,
     )
     
+def metrics(y, pred, pred_thresh, prefix='train_'):
+    pred_bool = (pred > pred_thresh).float()
+    ret = dict(zip(['tn', 'fp', 'fn', 'tp'],
+                    confusion_matrix(y, pred_bool, normalize='all', labels=(0,1)).ravel()))
+    ret.update({'acc': accuracy_score(y, pred_bool, normalize=True)})
+    if y.unique().shape[0] >= 2:
+        ret.update({'roc_auc': roc_auc_score(y, pred)})
+        pred_neg = 1 - pred
+        pred_comb = torch.concat((pred.unsqueeze(-1), pred_neg.unsqueeze(-1)), axis=-1)
+        # hotfix: break after one iter of wandb.plot.roc_curve/pr_curve:indices_to_plot to remove pred_neg
+        # also remove warning for n_sample > 10k
+        ret.update({'roc_curve': wandb.plot.roc_curve(y, pred_comb)})
+        ret.update({'pr_curve': wandb.plot.pr_curve(y, pred_comb)})
+        # table = wandb.Table(data=np.array(roc_curve(y, pred)).T)
+        # ret.update({'roc_curve': wandb.plot.line(table, x='False Positive Rate', y='True Positive Rate')})
+        # wandb.log({f'{prefix}{k}':v for k,v in ret.items()})
+    return {f'{prefix}{k}':v for k,v in ret.items()}

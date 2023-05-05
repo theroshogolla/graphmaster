@@ -109,7 +109,7 @@ def get_game(row: pd.Series):
     game.headers.update(row.drop(['game_ndx', 'moves', 'move_ndx'], errors='ignore').astype(str)) # chess.pgn.Headers only accepts str
     return game
 
-def get_boards(g: chess.pgn.Game, skip_first_n=10, skip_last_n=10):
+def get_boards(g: chess.pgn.Game, skip_first_n=20, skip_last_n=10):
     """
     chess.pgn.Game -> list of (dict['board' + meta]) for each move in game
     skips draws

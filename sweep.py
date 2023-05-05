@@ -26,12 +26,12 @@ def init():
         'name': 'muh_sweep',
         'parameters': {
             # 'batch_size': {'values': [32, 256]},
-            'net': {'values': ['fc', 'gcn', 'graphsage', 'gat',]},
+            'net': {'values': ['gcn', 'graphsage', 'gat',]},
             # 'n_hidden_ch': {'values': [256, 1024]},
-            'lr': {'values': [1e-2, 1e-4]},
-            # 'dropout_rate': {'values': [0.2, 0.5]},
+            'lr': {'values': [1e-3, 1e-4]},
+            'dropout_rate': {'values': [0.2, 0.5]},
             # 'target': {'values': ['stockfish', 'actual']},
-            # 'loss': {'values': ['bce', 'focal']},
+            'loss': {'values': ['bce', 'focal']},
         }
     }
     sweep_id = wandb.sweep(sweep=sweep_config, project='chess')
@@ -53,7 +53,7 @@ def agent(sweep_id):
 
 # cmdline config
 CONFIG = my_train.cmdline_config()
-NUM_WORKERS = 8
+NUM_WORKERS = 24
 
 if __name__ == '__main__':
     # multiprocessing.set_start_method('spawn')

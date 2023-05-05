@@ -29,7 +29,7 @@ def cmdline_config():
 
     parser.add_argument('--n_hidden_ch', default=512, type=int)
     parser.add_argument('--lr', default=1e-3, type=float)
-    parser.add_argument('-e', '--n_epochs', default=1_000, type=int)
+    parser.add_argument('-e', '--n_epochs', default=2_000, type=int)
     parser.add_argument('--pred_thresh', default=0.5, type=float)
     parser.add_argument('--dropout_rate', default=0.25, type=float)
     parser.add_argument('--node_fn', default='piece_color_type', type=str)
@@ -37,12 +37,12 @@ def cmdline_config():
     parser.add_argument('--target', default='actual', type=str)
     parser.add_argument('--pred_time', default=0.01, type=float)
     parser.add_argument('--wandb', action='store_true')
-    parser.add_argument('--gpu', default='0', type=str)
+    # parser.add_argument('--gpu', default='0', type=str)
     config = vars(parser.parse_args())
     return config
 
 def main(config, internal_wandb=True):
-    os.environ["CUDA_VISIBLE_DEVICES"] = config['gpu']
+    # os.environ["CUDA_VISIBLE_DEVICES"] = config['gpu']
     if config['node_fn'] == 'piece_color_type':
         attrs_per_node = 10
     elif config['node_fn'] == 'piece_color':
@@ -98,8 +98,9 @@ def main(config, internal_wandb=True):
             elif config['net'] == 'gin':
                 core = gnn.GIN(in_channels=attrs_per_node, hidden_channels=config['n_hidden_ch'], num_layers=3, out_channels=1)
             model = my_model.GraphClf(core, sigmoid=True)
-
+    print(f'network parameter count: {torch_geometric.profile.count_parameters(model)}')    
     print(f"train {len(ds_train)} samples / {config['batch_size']} batches = {-(-len(ds_train) // config['batch_size']):0.0f} iters per epoch")
+
 
     model = model.to('cuda')
     optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
@@ -109,6 +110,7 @@ def main(config, internal_wandb=True):
         criterion = my_model.focal_loss
     print(model)
 
+    # this has been moved to util; remove
     def metrics(y, pred, pred_thresh, prefix='train_'):
         pred_bool = (pred > pred_thresh).float()
         ret = dict(zip(['tn', 'fp', 'fn', 'tp'],
@@ -129,7 +131,7 @@ def main(config, internal_wandb=True):
         model.train()
         pred_accum = []
         y_accum = []
-        for data in tqdm(dl_train, desc=f'E{epoch:03d}: TRAIN'):  # Iterate in batches over the training dataset.
+        for data in tqdm(dl_train, desc=f'E{epoch:03d}: TRAIN', mininterval=10, maxinterval=60):  # Iterate in batches over the training dataset.
             x = data['x'].cuda()
             y = data['y'].cuda()
             out = model(x)  # Perform a single forward pass.
@@ -142,12 +144,13 @@ def main(config, internal_wandb=True):
         pred_accum = torch.cat(pred_accum).detach().cpu()
         y_accum = torch.cat(y_accum).to(int).detach().cpu()
         return y_accum, pred_accum
-
+    
+    @torch.no_grad()
     def test():
         model.eval()
         pred_accum = []
         y_accum = []
-        for data in tqdm(dl_test, desc=f'E{epoch:03d}: TEST  '):  # Iterate in batches over the training/test dataset.
+        for data in tqdm(dl_test, desc=f'E{epoch:03d}: TEST  ', mininterval=10, maxinterval=60):  # Iterate in batches over the training/test dataset.
             x = data['x'].cuda()
             y = data['y'].cuda()
             out = model(x)
@@ -159,10 +162,9 @@ def main(config, internal_wandb=True):
 
     for epoch in range(1, config['n_epochs']):
         y, pred = train()
-        print(y.shape, pred.shape)
-        metrics(y, pred, config['pred_thresh'])
+        metrics(y, pred, config['pred_thresh'], prefix='train_')
         y, pred = test()
-        metrics(y, pred, config['pred_thresh'])
+        metrics(y, pred, config['pred_thresh'], prefix='test_')
 
 if __name__ == '__main__':
     config = cmdline_config()
